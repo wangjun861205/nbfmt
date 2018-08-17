@@ -1,4 +1,4 @@
-package strfmt
+package nbfmt
 
 import (
 	"errors"
