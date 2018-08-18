@@ -21,11 +21,22 @@ var ErrNotValidValue = errors.New("nbfmt: not valid value")
 var ErrNotSeqVal = errors.New("nbfmt: the type of value is not a sequence type")
 var ErrNotMapVal = errors.New("nbfmt: the type of value is not a map type")
 var ErrNotStructVal = errors.New("nbfmt: the type of value is not a struct type")
+var ErrNotValidStructQuery = errors.New("nbfmt: the type of struct field query should be int or string")
+var ErrTempSyntax = errors.New("nbfmt: not supported template syntax")
 
 var seqRe = regexp.MustCompile(`\d+`)
 var fmtRe = regexp.MustCompile(`{{(.*?)}}`)
-var queryRe = regexp.MustCompile(`(".*?"|[^\.]+)`)
-var mapIndexRe = regexp.MustCompile(`"(.*?)"`)
+
+// var mapIndexRe = regexp.MustCompile(`"(.*?)"`)
+
+// var queryRe = regexp.MustCompile(`(".*?"|[^\.]+)`)
+var queryRe = regexp.MustCompile(`(".*?"|[^>^ ]+)`)
+var intRe = regexp.MustCompile(`-?\d+`)
+var floatRe = regexp.MustCompile(`\d+\.\d+`)
+var boolRe = regexp.MustCompile(`(true|false)`)
+var complexRe = regexp.MustCompile(`\(\d+\.\d+\s?,\s?\d+\.\d+\)`)
+var stringRe = regexp.MustCompile(`"(.*?)"`)
+var fieldRe = regexp.MustCompile(`^[_a-zA-z][\w_]*$`)
 
 func convertString(val reflect.Value) string {
 	return fmt.Sprintf("%s", val.Interface())
@@ -89,66 +100,182 @@ func convert(val reflect.Value) (string, error) {
 	}
 }
 
-func getTarget(query string, value interface{}) (reflect.Value, error) {
-	val := reflect.ValueOf(value)
-	if !val.IsValid() {
-		return val, ErrNotValidValue
+func procQuery(query string) ([]interface{}, error) {
+	l := queryRe.FindAllString(query, -1)
+	if len(l) == 0 {
+		return nil, nil
 	}
+	resultList := make([]interface{}, len(l))
+	for i, q := range l {
+		switch {
+		case stringRe.MatchString(q):
+			resultList[i] = stringRe.FindStringSubmatch(q)[1]
+		case intRe.MatchString(q):
+			i64, err := strconv.ParseInt(q, 10, 64)
+			if err != nil {
+				return nil, err
+			}
+			resultList[i] = int(i64)
+		case floatRe.MatchString(q):
+			f64, err := strconv.ParseFloat(q, 64)
+			if err != nil {
+				return nil, err
+			}
+			resultList[i] = f64
+		case boolRe.MatchString(q):
+			if q == "true" {
+				resultList[i] = true
+			} else {
+				resultList[i] = false
+			}
+		case complexRe.MatchString(q):
+			q = strings.Replace(strings.Trim(q, "()"), " ", "", -1)
+			l := strings.Split(q, ",")
+			f1, err := strconv.ParseFloat(l[0], 64)
+			if err != nil {
+				return nil, err
+			}
+			f2, err := strconv.ParseFloat(l[1], 64)
+			if err != nil {
+				return nil, err
+			}
+			resultList[i] = complex(f1, f2)
+		case fieldRe.MatchString(q):
+			resultList[i] = q
+		default:
+			return nil, ErrTempSyntax
+
+		}
+	}
+	return resultList, nil
+}
+
+func getObj(q interface{}, val reflect.Value) (reflect.Value, error) {
 	var err error
 	val, err = stripPtr(val)
 	if err != nil {
 		return val, err
 	}
-	query = strings.Trim(query, ".")
-	if query == "" {
-		return val, nil
-	}
-	l := queryRe.FindAllStringSubmatch(query, -1)
-	for _, q := range l {
-		if seqRe.MatchString(q[1]) {
-			index, err := strconv.ParseInt(q[1], 10, 64)
-			if err != nil {
-				return val, err
-			}
+	switch val.Kind() {
+	case reflect.Array, reflect.Slice:
+		if i, ok := q.(int); !ok {
+			return val, ErrNotSeqTemp
+		} else {
 			length, err := getLen(val)
 			if err != nil {
 				return val, err
 			}
-			index, err = fixIndex(index, length)
+			i, err = fixIndex(i, length)
 			if err != nil {
 				return val, err
 			}
-			val, err = getTargetByNumIndex(index, val)
-			if err != nil {
-				return val, err
-			}
-		} else if mapIndexRe.MatchString(q[1]) {
-			index := mapIndexRe.FindStringSubmatch(q[1])
-			if val.Kind() != reflect.Map {
-				return val, ErrNotMapVal
-			}
-			var err error
-			val, err = getTargetByStrIndex(index[1], val)
-			if err != nil {
-				return val, err
-			}
-		} else {
-			index := q[1]
-			if val.Kind() != reflect.Struct {
-				return val, ErrNotStructVal
-			}
-			var err error
-			val, err = getTargetByStrIndex(index, val)
-			if err != nil {
-				return val, err
-			}
+			return stripPtr(val.Index(i))
 		}
+	case reflect.Map:
+		return stripPtr(val.MapIndex(reflect.ValueOf(q)))
+	case reflect.Struct:
+		switch v := q.(type) {
+		case int:
+			length, err := getLen(val)
+			if err != nil {
+				return val, err
+			}
+			v, err = fixIndex(v, length)
+			if err != nil {
+				return val, err
+			}
+			return stripPtr(val.Field(v))
+		case string:
+			return stripPtr(val.FieldByName(v))
+		default:
+			return val, ErrNotValidStructQuery
+		}
+	default:
+		return val, ErrNotSupportedType
 	}
-	if !val.IsValid() {
-		return val, ErrNotValidValue
+}
+
+func find(query string, value interface{}) (reflect.Value, error) {
+	val := reflect.ValueOf(value)
+	qList, err := procQuery(query)
+	if err != nil {
+		return val, err
+	}
+	if len(qList) == 0 {
+		if value == nil {
+			return reflect.ValueOf(""), nil
+		}
+		return stripPtr(val)
+	}
+	for _, q := range qList {
+		val, err = getObj(q, val)
+		if err != nil {
+			return val, err
+		}
 	}
 	return val, nil
 }
+
+// func getTarget(query string, value interface{}) (reflect.Value, error) {
+// 	val := reflect.ValueOf(value)
+// 	if !val.IsValid() {
+// 		return val, ErrNotValidValue
+// 	}
+// 	var err error
+// 	val, err = stripPtr(val)
+// 	if err != nil {
+// 		return val, err
+// 	}
+// 	query = strings.Trim(query, ".")
+// 	if query == "" {
+// 		return val, nil
+// 	}
+// 	l := queryRe.FindAllStringSubmatch(query, -1)
+// 	for _, q := range l {
+// 		if seqRe.MatchString(q[1]) {
+// 			index, err := strconv.ParseInt(q[1], 10, 64)
+// 			if err != nil {
+// 				return val, err
+// 			}
+// 			length, err := getLen(val)
+// 			if err != nil {
+// 				return val, err
+// 			}
+// 			index, err = fixIndex(index, length)
+// 			if err != nil {
+// 				return val, err
+// 			}
+// 			val, err = getTargetByNumIndex(index, val)
+// 			if err != nil {
+// 				return val, err
+// 			}
+// 		} else if mapIndexRe.MatchString(q[1]) {
+// 			index := mapIndexRe.FindStringSubmatch(q[1])
+// 			if val.Kind() != reflect.Map {
+// 				return val, ErrNotMapVal
+// 			}
+// 			var err error
+// 			val, err = getTargetByStrIndex(index[1], val)
+// 			if err != nil {
+// 				return val, err
+// 			}
+// 		} else {
+// 			index := q[1]
+// 			if val.Kind() != reflect.Struct {
+// 				return val, ErrNotStructVal
+// 			}
+// 			var err error
+// 			val, err = getTargetByStrIndex(index, val)
+// 			if err != nil {
+// 				return val, err
+// 			}
+// 		}
+// 	}
+// 	if !val.IsValid() {
+// 		return val, ErrNotValidValue
+// 	}
+// 	return val, nil
+// }
 
 func stripPtr(val reflect.Value) (reflect.Value, error) {
 	for val.Kind() == reflect.Ptr || val.Kind() == reflect.Interface {
@@ -160,18 +287,18 @@ func stripPtr(val reflect.Value) (reflect.Value, error) {
 	return val, nil
 }
 
-func getLen(val reflect.Value) (int64, error) {
+func getLen(val reflect.Value) (int, error) {
 	switch val.Kind() {
 	case reflect.Slice, reflect.Array:
-		return int64(val.Len()), nil
+		return val.Len(), nil
 	case reflect.Struct:
-		return int64(val.NumField()), nil
+		return val.NumField(), nil
 	default:
 		return -1, ErrNotSeqVal
 	}
 }
 
-func fixIndex(index, length int64) (int64, error) {
+func fixIndex(index, length int) (int, error) {
 	if index < 0 {
 		index = length + index
 		if index < 0 {
@@ -184,42 +311,42 @@ func fixIndex(index, length int64) (int64, error) {
 	return index, nil
 }
 
-func getTargetByNumIndex(index int64, val reflect.Value) (reflect.Value, error) {
-	if !val.IsValid() {
-		return val, ErrNotValidValue
-	}
-	switch val.Kind() {
-	case reflect.Slice, reflect.Array:
-		return stripPtr(val.Index(int(index)))
-	case reflect.Struct:
-		return stripPtr(val.Field(int(index)))
-	default:
-		return val, ErrNotSeqVal
-	}
-}
+// func getTargetByNumIndex(index int64, val reflect.Value) (reflect.Value, error) {
+// 	if !val.IsValid() {
+// 		return val, ErrNotValidValue
+// 	}
+// 	switch val.Kind() {
+// 	case reflect.Slice, reflect.Array:
+// 		return stripPtr(val.Index(int(index)))
+// 	case reflect.Struct:
+// 		return stripPtr(val.Field(int(index)))
+// 	default:
+// 		return val, ErrNotSeqVal
+// 	}
+// }
 
-func getTargetByStrIndex(index string, val reflect.Value) (reflect.Value, error) {
-	if !val.IsValid() {
-		return val, ErrNotValidValue
-	}
-	switch val.Kind() {
-	case reflect.Map:
-		return stripPtr(val.MapIndex(reflect.ValueOf(index)))
-	case reflect.Struct:
-		return stripPtr(val.FieldByName(index))
-	default:
-		return val, ErrNotMapVal
-	}
-}
+// func getTargetByStrIndex(index string, val reflect.Value) (reflect.Value, error) {
+// 	if !val.IsValid() {
+// 		return val, ErrNotValidValue
+// 	}
+// 	switch val.Kind() {
+// 	case reflect.Map:
+// 		return stripPtr(val.MapIndex(reflect.ValueOf(index)))
+// 	case reflect.Struct:
+// 		return stripPtr(val.FieldByName(index))
+// 	default:
+// 		return val, ErrNotMapVal
+// 	}
+// }
 
 func Fmt(temp string, value interface{}) (string, error) {
 	l := fmtRe.FindAllStringSubmatch(temp, -1)
 	for _, t := range l {
-		target, err := getTarget(t[1], value)
+		obj, err := find(t[1], value)
 		if err != nil {
 			return "", err
 		}
-		s, err := convert(target)
+		s, err := convert(obj)
 		if err != nil {
 			return "", err
 		}
