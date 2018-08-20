@@ -2,7 +2,6 @@ package nbfmt
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"reflect"
 	"regexp"
@@ -10,26 +9,9 @@ import (
 	"strings"
 )
 
-var ErrValueType = errors.New("nbfmt: Not valid value type")
-var ErrNotEnoughValue = errors.New("nbfmt: Not enough values to format template")
-var ErrNotSeqTemp = errors.New("nbfmt: the templates in FmtBySeq() must be sequence template")
-var ErrNotNameTemp = errors.New("nbfmt: the templates in FmtByName() must be name template")
-var ErrNotValidPtr = errors.New("nbfmt: the pointer of value is not valid")
-var ErrNotSupportedType = errors.New("nbfmt: the type of value is not supported")
-var ErrNotSliceOrArray = errors.New("nbfmt: the type of value is not slice or array")
-var ErrNotValidValue = errors.New("nbfmt: not valid value")
-var ErrNotSeqVal = errors.New("nbfmt: the type of value is not a sequence type")
-var ErrNotMapVal = errors.New("nbfmt: the type of value is not a map type")
-var ErrNotStructVal = errors.New("nbfmt: the type of value is not a struct type")
-var ErrNotValidStructQuery = errors.New("nbfmt: the type of struct field query should be int or string")
-var ErrTempSyntax = errors.New("nbfmt: not supported template syntax")
-
 var seqRe = regexp.MustCompile(`\d+`)
 var fmtRe = regexp.MustCompile(`{{(.*?)}}`)
 
-// var mapIndexRe = regexp.MustCompile(`"(.*?)"`)
-
-// var queryRe = regexp.MustCompile(`(".*?"|[^\.]+)`)
 var queryRe = regexp.MustCompile(`(".*?"|[^>^ ]+)`)
 var intRe = regexp.MustCompile(`-?\d+`)
 var floatRe = regexp.MustCompile(`\d+\.\d+`)
@@ -94,9 +76,9 @@ func convert(val reflect.Value) (string, error) {
 			val = val.Elem()
 			return convert(val)
 		}
-		return "", ErrNotValidPtr
+		return "", InvalidPtrError{val}
 	default:
-		return "", ErrNotSupportedType
+		return "", NotSupportedTypeError{val}
 	}
 }
 
@@ -143,7 +125,7 @@ func procQuery(query string) ([]interface{}, error) {
 		case fieldRe.MatchString(q):
 			resultList[i] = q
 		default:
-			return nil, ErrTempSyntax
+			return nil, InvalidQueryError{query, q}
 
 		}
 	}
@@ -151,15 +133,15 @@ func procQuery(query string) ([]interface{}, error) {
 }
 
 func getObj(q interface{}, val reflect.Value) (reflect.Value, error) {
-	var err error
-	val, err = stripPtr(val)
-	if err != nil {
-		return val, err
+	var isValid bool
+	val, isValid = stripPtr(val)
+	if !isValid {
+		return val, InvalidValueError{val}
 	}
 	switch val.Kind() {
 	case reflect.Array, reflect.Slice:
 		if i, ok := q.(int); !ok {
-			return val, ErrNotSeqTemp
+			return val, InvalidSeqQueryError{q}
 		} else {
 			length, err := getLen(val)
 			if err != nil {
@@ -169,10 +151,22 @@ func getObj(q interface{}, val reflect.Value) (reflect.Value, error) {
 			if err != nil {
 				return val, err
 			}
-			return stripPtr(val.Index(i))
+			val, isValid = stripPtr(val.Index(i))
+			if !isValid {
+				return val, InvalidValueError{val}
+			}
+			return val, nil
 		}
 	case reflect.Map:
-		return stripPtr(val.MapIndex(reflect.ValueOf(q)))
+		t := reflect.TypeOf(q)
+		if val.Type().Key().Name() != t.Name() {
+			return val, MapKeyTypeError{requiredType: val.Type().Key(), providedType: t}
+		}
+		val, isValid = stripPtr(val.MapIndex(reflect.ValueOf(q)))
+		if !isValid {
+			return val, InvalidValueError{val}
+		}
+		return val, nil
 	case reflect.Struct:
 		switch v := q.(type) {
 		case int:
@@ -184,14 +178,22 @@ func getObj(q interface{}, val reflect.Value) (reflect.Value, error) {
 			if err != nil {
 				return val, err
 			}
-			return stripPtr(val.Field(v))
+			val, isValid = stripPtr(val.Field(v))
+			if !isValid {
+				return val, InvalidValueError{val}
+			}
+			return val, nil
 		case string:
-			return stripPtr(val.FieldByName(v))
+			val, isValid = stripPtr(val.FieldByName(v))
+			if !isValid {
+				return val, InvalidValueError{val}
+			}
+			return val, nil
 		default:
-			return val, ErrNotValidStructQuery
+			return val, InvalidStructFieldQueryError{q}
 		}
 	default:
-		return val, ErrNotSupportedType
+		return val, NotSupportedTypeError{val}
 	}
 }
 
@@ -205,7 +207,12 @@ func find(query string, value interface{}) (reflect.Value, error) {
 		if value == nil {
 			return reflect.ValueOf(""), nil
 		}
-		return stripPtr(val)
+		var isValid bool
+		val, isValid = stripPtr(val)
+		if !isValid {
+			return val, InvalidValueError{val}
+		}
+		return val, nil
 	}
 	for _, q := range qList {
 		val, err = getObj(q, val)
@@ -216,75 +223,14 @@ func find(query string, value interface{}) (reflect.Value, error) {
 	return val, nil
 }
 
-// func getTarget(query string, value interface{}) (reflect.Value, error) {
-// 	val := reflect.ValueOf(value)
-// 	if !val.IsValid() {
-// 		return val, ErrNotValidValue
-// 	}
-// 	var err error
-// 	val, err = stripPtr(val)
-// 	if err != nil {
-// 		return val, err
-// 	}
-// 	query = strings.Trim(query, ".")
-// 	if query == "" {
-// 		return val, nil
-// 	}
-// 	l := queryRe.FindAllStringSubmatch(query, -1)
-// 	for _, q := range l {
-// 		if seqRe.MatchString(q[1]) {
-// 			index, err := strconv.ParseInt(q[1], 10, 64)
-// 			if err != nil {
-// 				return val, err
-// 			}
-// 			length, err := getLen(val)
-// 			if err != nil {
-// 				return val, err
-// 			}
-// 			index, err = fixIndex(index, length)
-// 			if err != nil {
-// 				return val, err
-// 			}
-// 			val, err = getTargetByNumIndex(index, val)
-// 			if err != nil {
-// 				return val, err
-// 			}
-// 		} else if mapIndexRe.MatchString(q[1]) {
-// 			index := mapIndexRe.FindStringSubmatch(q[1])
-// 			if val.Kind() != reflect.Map {
-// 				return val, ErrNotMapVal
-// 			}
-// 			var err error
-// 			val, err = getTargetByStrIndex(index[1], val)
-// 			if err != nil {
-// 				return val, err
-// 			}
-// 		} else {
-// 			index := q[1]
-// 			if val.Kind() != reflect.Struct {
-// 				return val, ErrNotStructVal
-// 			}
-// 			var err error
-// 			val, err = getTargetByStrIndex(index, val)
-// 			if err != nil {
-// 				return val, err
-// 			}
-// 		}
-// 	}
-// 	if !val.IsValid() {
-// 		return val, ErrNotValidValue
-// 	}
-// 	return val, nil
-// }
-
-func stripPtr(val reflect.Value) (reflect.Value, error) {
+func stripPtr(val reflect.Value) (reflect.Value, bool) {
 	for val.Kind() == reflect.Ptr || val.Kind() == reflect.Interface {
 		if !val.IsValid() {
-			return val, ErrNotValidPtr
+			return val, false
 		}
 		val = val.Elem()
 	}
-	return val, nil
+	return val, true
 }
 
 func getLen(val reflect.Value) (int, error) {
@@ -294,51 +240,24 @@ func getLen(val reflect.Value) (int, error) {
 	case reflect.Struct:
 		return val.NumField(), nil
 	default:
-		return -1, ErrNotSeqVal
+		return -1, NotSeqTypeError{val}
 	}
 }
 
 func fixIndex(index, length int) (int, error) {
 	if index < 0 {
-		index = length + index
-		if index < 0 {
-			return -1, ErrNotEnoughValue
+		if length+index < 0 {
+			return -1, IndexOutRangeError{index, length}
 		}
+		index = length + index
 	}
 	if index >= length {
-		return -1, ErrNotEnoughValue
+		return -1, IndexOutRangeError{index, length}
 	}
 	return index, nil
 }
 
-// func getTargetByNumIndex(index int64, val reflect.Value) (reflect.Value, error) {
-// 	if !val.IsValid() {
-// 		return val, ErrNotValidValue
-// 	}
-// 	switch val.Kind() {
-// 	case reflect.Slice, reflect.Array:
-// 		return stripPtr(val.Index(int(index)))
-// 	case reflect.Struct:
-// 		return stripPtr(val.Field(int(index)))
-// 	default:
-// 		return val, ErrNotSeqVal
-// 	}
-// }
-
-// func getTargetByStrIndex(index string, val reflect.Value) (reflect.Value, error) {
-// 	if !val.IsValid() {
-// 		return val, ErrNotValidValue
-// 	}
-// 	switch val.Kind() {
-// 	case reflect.Map:
-// 		return stripPtr(val.MapIndex(reflect.ValueOf(index)))
-// 	case reflect.Struct:
-// 		return stripPtr(val.FieldByName(index))
-// 	default:
-// 		return val, ErrNotMapVal
-// 	}
-// }
-
+//Fmt format template by value
 func Fmt(temp string, value interface{}) (string, error) {
 	l := fmtRe.FindAllStringSubmatch(temp, -1)
 	for _, t := range l {
