@@ -10,7 +10,7 @@ import (
 )
 
 var seqRe = regexp.MustCompile(`\d+`)
-var fmtRe = regexp.MustCompile(`{{(.*?)}}`)
+var fmtRe = regexp.MustCompile(`{{([^{].*?)?}}`)
 
 var queryRe = regexp.MustCompile(`(".*?"|[^>^ ]+)`)
 var intRe = regexp.MustCompile(`-?\d+`)
@@ -136,7 +136,7 @@ func getObj(q interface{}, val reflect.Value) (reflect.Value, error) {
 	var isValid bool
 	val, isValid = stripPtr(val)
 	if !isValid {
-		return val, InvalidValueError{val}
+		return val, InvalidValueError{q}
 	}
 	switch val.Kind() {
 	case reflect.Array, reflect.Slice:
@@ -153,7 +153,7 @@ func getObj(q interface{}, val reflect.Value) (reflect.Value, error) {
 			}
 			val, isValid = stripPtr(val.Index(i))
 			if !isValid {
-				return val, InvalidValueError{val}
+				return val, InvalidValueError{q}
 			}
 			return val, nil
 		}
@@ -164,7 +164,7 @@ func getObj(q interface{}, val reflect.Value) (reflect.Value, error) {
 		}
 		val, isValid = stripPtr(val.MapIndex(reflect.ValueOf(q)))
 		if !isValid {
-			return val, InvalidValueError{val}
+			return val, InvalidValueError{q}
 		}
 		return val, nil
 	case reflect.Struct:
@@ -180,18 +180,20 @@ func getObj(q interface{}, val reflect.Value) (reflect.Value, error) {
 			}
 			val, isValid = stripPtr(val.Field(v))
 			if !isValid {
-				return val, InvalidValueError{val}
+				return val, InvalidValueError{q}
 			}
 			return val, nil
 		case string:
 			val, isValid = stripPtr(val.FieldByName(v))
 			if !isValid {
-				return val, InvalidValueError{val}
+				return val, InvalidValueError{q}
 			}
 			return val, nil
 		default:
 			return val, InvalidStructFieldQueryError{q}
 		}
+	case reflect.Invalid:
+		return val, InvalidValueError{q}
 	default:
 		return val, NotSupportedTypeError{val}
 	}
@@ -210,7 +212,7 @@ func find(query string, value interface{}) (reflect.Value, error) {
 		var isValid bool
 		val, isValid = stripPtr(val)
 		if !isValid {
-			return val, InvalidValueError{val}
+			return val, InvalidValueError{"root value"}
 		}
 		return val, nil
 	}
@@ -225,10 +227,10 @@ func find(query string, value interface{}) (reflect.Value, error) {
 
 func stripPtr(val reflect.Value) (reflect.Value, bool) {
 	for val.Kind() == reflect.Ptr || val.Kind() == reflect.Interface {
-		if !val.IsValid() {
-			return val, false
-		}
 		val = val.Elem()
+	}
+	if !val.IsValid() {
+		return val, false
 	}
 	return val, true
 }

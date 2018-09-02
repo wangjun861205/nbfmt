@@ -17,11 +17,12 @@ func (e MapKeyTypeError) Error() string {
 
 //InvalidValueError will be return when object value is not valid
 type InvalidValueError struct {
-	val reflect.Value
+	q interface{}
 }
 
 func (e InvalidValueError) Error() string {
-	return fmt.Sprintf("nbfmt: invalid value error (%s is not valid value)", e.val.Type())
+	fmt.Println("@@@@@@@@@@@@@@@@@@@@@@@@@@")
+	return fmt.Sprintf("nbfmt: invalid value error (%v is not valid value)", e.q)
 }
 
 //NotSupportedTypeError will be return when object type is not supported
@@ -30,6 +31,7 @@ type NotSupportedTypeError struct {
 }
 
 func (e NotSupportedTypeError) Error() string {
+	fmt.Println("=====================================")
 	return fmt.Sprintf("nbfmt: not supported type %s", e.val.Type())
 }
 
@@ -58,6 +60,7 @@ type NotSeqTypeError struct {
 }
 
 func (e NotSeqTypeError) Error() string {
+	fmt.Println("????????????????????????")
 	return fmt.Sprintf("nbfmt: %s is not a sequence type", e.val.Type())
 }
 
@@ -77,6 +80,7 @@ type InvalidPtrError struct {
 }
 
 func (e InvalidPtrError) Error() string {
+	fmt.Println("!!!!!!!!!!!!!!!!!!!!")
 	return fmt.Sprintf("nbfmt: *%s is not valid ptr", e.val.Type())
 }
 
