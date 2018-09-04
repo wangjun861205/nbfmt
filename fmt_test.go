@@ -11,7 +11,9 @@ type Table struct {
 }
 
 var src = `hello world
-{{ l[0] }}
+{{ for i, b in m }}
+	{{ i }} : {{ b }}
+{{ endfor }}
 test`
 
 func TestFmt(t *testing.T) {
@@ -62,8 +64,8 @@ func TestFmt(t *testing.T) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	l := []bool{true, false, false}
-	s, err := temp.run(map[string]interface{}{"l": l})
+	m := map[string]bool{"hello": true, "world": false}
+	s, err := temp.run(map[string]interface{}{"m": m})
 	if err != nil {
 		log.Fatal(err)
 	}

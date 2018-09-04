@@ -41,6 +41,7 @@ const (
 	gteIdent
 	andIdent
 	orIdent
+	commaIdent
 )
 
 // type exprType int
@@ -90,6 +91,7 @@ const (
 	boolconst
 	operator
 	keyword
+	punct
 )
 
 type object struct {
@@ -439,10 +441,12 @@ func (b *ifBlock) run(env map[string]interface{}) (string, error) {
 }
 
 type forBlock struct {
-	src          string
-	expr         []object
-	subBlocks    []block
-	interVarName string
+	src       string
+	expr      []object
+	subBlocks []block
+	// interVarName string
+	indexVarName string
+	valueVarName string
 	iterObj      object
 }
 
@@ -463,26 +467,57 @@ func (b *forBlock) appendSubBlock(blk block) {
 }
 
 func (b *forBlock) init() error {
-	if len(b.expr) != 4 {
-		return fmt.Errorf("invalid for block expression: %v", b.expr)
-	}
-	if b.expr[1].typ != variable {
-		return fmt.Errorf("invalid inter variable: %v", b.expr[1])
-	}
-	if len(b.expr[1].idents) != 1 {
-		return fmt.Errorf("invalid inter variable idents length: %v", b.expr[1])
-	}
-	b.interVarName = b.expr[1].idents[0].name
-	if b.expr[3].typ != variable {
-		return fmt.Errorf("invalid iter target: %v", b.expr[3])
-	}
-	b.iterObj = b.expr[3]
-	for _, sb := range b.subBlocks {
-		err := sb.init()
-		if err != nil {
-			return err
-		}
+	ctx := "start"
+	for _, o := range b.expr[1:] {
+		switch o.typ {
+		case variable:
+			switch ctx {
+			case "start":
+				ctx = "index"
+				if len(o.idents) > 1 {
+					return fmt.Errorf("invalid for statement(invalid index): %v", o)
+				}
+				b.indexVarName = o.idents[0].name
+			case "comma":
+				ctx = "value"
+				if len(o.idents) > 1 {
+					return fmt.Errorf("invalid for statement(invalid value): %v", o)
+				}
+				b.valueVarName = o.idents[0].name
+			case "in":
+				ctx = "target"
+				b.iterObj = o
+				ctx = "finish"
+			default:
+				return fmt.Errorf("invalid for statement: %v", b.expr)
+			}
+		case punct:
+			if o.idents[0].typ != commaIdent {
+				return fmt.Errorf("invalid for statement: %v", b.expr)
+			}
+			switch ctx {
+			case "index":
+				ctx = "comma"
+			default:
+				return fmt.Errorf("invalid for statement: %v", b.expr)
+			}
+		case keyword:
+			if o.idents[0].typ != inIdent {
+				return fmt.Errorf("invalid for statement: %v", b.expr)
+			}
+			switch ctx {
+			case "value":
+				ctx = "in"
+			default:
+				return fmt.Errorf("invalid for statement: %v", b.expr)
+			}
+		default:
+			return fmt.Errorf("invalid for statement: %v", b.expr)
 
+		}
+	}
+	if ctx != "finish" {
+		return fmt.Errorf("invalid for statement: %v", b.expr)
 	}
 	return nil
 }
@@ -493,30 +528,56 @@ func (b *forBlock) run(env map[string]interface{}) (string, error) {
 		return "", err
 	}
 	kind := reflect.TypeOf(o).Kind()
-	if kind != reflect.Slice && kind != reflect.Array {
-		return "", fmt.Errorf("the object for iterating is not array or slice: %v", o)
-	}
 	val := reflect.ValueOf(o)
 	builder := strings.Builder{}
-	for i := 0; i < val.Len(); i++ {
-		elemVal := val.Index(i)
-		for elemVal.Kind() == reflect.Ptr || elemVal.Kind() == reflect.Interface {
-			elemVal = elemVal.Elem()
+	switch kind {
+	case reflect.Slice, reflect.Array:
+		for i := 0; i < val.Len(); i++ {
+			elemVal := val.Index(i)
+			for elemVal.Kind() == reflect.Ptr || elemVal.Kind() == reflect.Interface {
+				elemVal = elemVal.Elem()
+				if !elemVal.IsValid() {
+					return "", fmt.Errorf("invalid slice(array) element: index %d", i)
+				}
+			}
 			if !elemVal.IsValid() {
 				return "", fmt.Errorf("invalid slice(array) element: index %d", i)
 			}
-		}
-		if !elemVal.IsValid() {
-			return "", fmt.Errorf("invalid slice(array) element: index %d", i)
-		}
-		env[b.interVarName] = elemVal.Interface()
-		for _, sb := range b.subBlocks {
-			s, err := sb.run(env)
-			if err != nil {
-				return "", err
+			env[b.indexVarName] = i
+			env[b.valueVarName] = elemVal.Interface()
+			for _, sb := range b.subBlocks {
+				s, err := sb.run(env)
+				if err != nil {
+					return "", err
+				}
+				builder.WriteString(s)
 			}
-			builder.WriteString(s)
 		}
+	case reflect.Map:
+		keyList := val.MapKeys()
+		for _, key := range keyList {
+			elemVal := val.MapIndex(key)
+			for elemVal.Kind() == reflect.Ptr || elemVal.Kind() == reflect.Interface {
+				elemVal = elemVal.Elem()
+				if !elemVal.IsValid() {
+					return "", fmt.Errorf("invalid map element: key %v", key)
+				}
+			}
+			if !elemVal.IsValid() {
+				return "", fmt.Errorf("invalid map element: key %v", key)
+			}
+			env[b.indexVarName] = key.Interface()
+			env[b.valueVarName] = elemVal.Interface()
+			for _, sb := range b.subBlocks {
+				s, err := sb.run(env)
+				if err != nil {
+					return "", err
+				}
+				builder.WriteString(s)
+			}
+		}
+	default:
+		return "", fmt.Errorf("only array, slice and map are supported by for loop: %v", val.Interface())
 	}
 	return builder.String(), nil
 }
@@ -727,52 +788,15 @@ func (b *valueBlock) run(env map[string]interface{}) (string, error) {
 	}
 	switch val := v.(type) {
 	case string:
-		return fmt.Sprintf("%q", val), nil
-	case int64:
-		return strconv.FormatInt(val, 10), nil
-	case float64:
-		return strconv.FormatFloat(val, 'f', -1, 64), nil
+		return val, nil
+	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
+		return fmt.Sprintf("%d", val), nil
+	case float32, float64:
+		return fmt.Sprintf("%f", val), nil
 	case bool:
-		return strconv.FormatBool(val), nil
+		return fmt.Sprintf("%t", val), nil
 	default:
 		return "", fmt.Errorf("invalid value type: %v", v)
-	}
-}
-
-type exprType int
-
-type exprGroup struct {
-	objects   []object
-	subGroups []exprGroup
-}
-
-func (g *exprGroup) split() {
-	if len(g.subGroups) > 0 {
-		for i := range g.subGroups {
-			g.subGroups[i].split()
-		}
-	} else {
-		buf := make([]object, 0, 8)
-		for _, o := range g.objects {
-			if o.idents[0].typ == andIdent || o.idents[0].typ == orIdent {
-				if len(buf) > 0 {
-					objs := make([]object, len(buf))
-					copy(objs, buf)
-					buf = buf[:0]
-					g.subGroups = append(g.subGroups, exprGroup{objects: objs, subGroups: make([]exprGroup, 0, 8)})
-				}
-				g.subGroups = append(g.subGroups, exprGroup{objects: []object{o}, subGroups: make([]exprGroup, 0, 8)})
-			} else {
-				buf = append(buf, o)
-			}
-		}
-		if len(buf) > 0 {
-			objs := make([]object, len(buf))
-			copy(objs, buf)
-			buf = buf[:0]
-			g.subGroups = append(g.subGroups, exprGroup{objects: objs, subGroups: make([]exprGroup, 0, 8)})
-		}
-		g.objects = g.objects[:0]
 	}
 }
 
@@ -827,6 +851,8 @@ func (e *expression) compare(env map[string]interface{}) (bool, error) {
 			return intCompare(lv.(int64), rv.(int64), e.op)
 		case reflect.Float64:
 			return floatCompare(lv.(float64), rv.(float64), e.op)
+		case reflect.Bool:
+			return boolCompare(lv.(bool), rv.(bool), e.op)
 		default:
 			return false, fmt.Errorf("the type is not supported for compring: %v", lk)
 		}
@@ -859,92 +885,6 @@ func (e *expression) eval(env map[string]interface{}) (bool, error) {
 			return false, err
 		}
 	} else {
-		// var isMatch bool
-		// if e.op.typ == invalidObj {
-		// 	lv, err := e.leftVal.getVal(env)
-		// 	if err != nil {
-		// 		return false, err
-		// 	}
-		// 	if bv, ok := lv.(bool); ok {
-		// 		isMatch = bv
-		// 	} else {
-		// 		return false, fmt.Errorf("invalid bool value: %v", e.leftVal)
-		// 	}
-		// } else {
-		// 	lv, err := e.leftVal.getVal(env)
-		// 	if err != nil {
-		// 		return false, err
-		// 	}
-		// 	rv, err := e.rightVal.getVal(env)
-		// 	if err != nil {
-		// 		return false, err
-		// 	}
-		// 	switch e.op.idents[0].typ {
-		// 	case eqIdent:
-		// 		lKind, rKind := reflect.TypeOf(lv).Kind(), reflect.TypeOf(rv).Kind()
-		// 		if lKind != rKind {
-		// 			return false, fmt.Errorf("the types of left value and right value is not equal: %v, %v", e.leftVal, e.rightVal)
-		// 		}
-		// 		isMatch = lv == rv
-		// 	case neqIdent:
-		// 		lKind, rKind := reflect.TypeOf(lv).Kind(), reflect.TypeOf(rv).Kind()
-		// 		if lKind != rKind {
-		// 			return false, fmt.Errorf("the types of left value and right value is not equal: %v, %v", e.leftVal, e.rightVal)
-		// 		}
-		// 		isMatch = lv != rv
-		// 	case ltIdent, lteIdent, gtIdent, gteIdent:
-		// 		lKind, rKind := reflect.TypeOf(lv).Kind(), reflect.TypeOf(rv).Kind()
-		// 		if lKind != rKind {
-		// 			return false, fmt.Errorf("the types of left value and right value is not equal: %v, %v", e.leftVal, e.rightVal)
-		// 		}
-		// 		switch lKind {
-		// 		case reflect.String:
-		// 			l, r := lv.(string), rv.(string)
-		// 			switch e.op.idents[0].typ {
-		// 			case ltIdent:
-		// 				isMatch = l < r
-		// 			case lteIdent:
-		// 				isMatch = l <= r
-		// 			case gtIdent:
-		// 				isMatch = l > r
-		// 			case gteIdent:
-		// 				isMatch = l >= r
-		// 			default:
-		// 				return false, fmt.Errorf("invalid compare operator: %v", e.op)
-		// 			}
-		// 		case reflect.Int64:
-		// 			l, r := lv.(int64), rv.(int64)
-		// 			switch e.op.idents[0].typ {
-		// 			case ltIdent:
-		// 				isMatch = l < r
-		// 			case lteIdent:
-		// 				isMatch = l <= r
-		// 			case gtIdent:
-		// 				isMatch = l > r
-		// 			case gteIdent:
-		// 				isMatch = l >= r
-		// 			default:
-		// 				return false, fmt.Errorf("invalid compare operator: %v", e.op)
-		// 			}
-		// 		case reflect.Float64:
-		// 			l, r := lv.(float64), rv.(float64)
-		// 			switch e.op.idents[0].typ {
-		// 			case ltIdent:
-		// 				isMatch = l < r
-		// 			case lteIdent:
-		// 				isMatch = l <= r
-		// 			case gtIdent:
-		// 				isMatch = l > r
-		// 			case gteIdent:
-		// 				isMatch = l >= r
-		// 			default:
-		// 				return false, fmt.Errorf("invalid compare operator: %v", e.op)
-		// 			}
-		// 		default:
-		// 			return false, fmt.Errorf("invalid types for less compare: %v, %v", e.leftVal, e.rightVal)
-		// 		}
-		// 	}
-		// }
 		isMatch, err := e.compare(env)
 		if err != nil {
 			return false, err

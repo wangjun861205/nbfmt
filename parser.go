@@ -137,6 +137,9 @@ func splitBlock(c *code) error {
 		case '.':
 			flushBuilder()
 			appendIdent(".", dotIdent)
+		case ',':
+			flushBuilder()
+			appendIdent(",", commaIdent)
 		case ' ', '\t':
 			if isOpen {
 				builder.WriteByte(b)
@@ -190,6 +193,8 @@ func splitBlock(c *code) error {
 				c.idents[i].typ = numIdent
 			case id.name == "true" || id.name == "false":
 				c.idents[i].typ = boolIdent
+			case id.name == ",":
+				c.idents[i].typ = commaIdent
 			default:
 				c.idents[i].typ = objIdent
 			}
@@ -254,6 +259,14 @@ func parseObj(l *[]code) error {
 						return errors.New("invalid bool identifier")
 
 					}
+				case commaIdent:
+					ids := make([]ident, len(idents))
+					copy(ids, idents)
+					(*l)[i].objects = append((*l)[i].objects, object{idents: ids, typ: typ})
+					typ = invalidObj
+					idents = idents[:0]
+					(*l)[i].objects = append((*l)[i].objects, object{idents: []ident{id}, typ: punct})
+
 				case leftBracketIdent:
 					switch typ {
 					case variable:

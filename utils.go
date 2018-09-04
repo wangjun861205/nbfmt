@@ -58,3 +58,14 @@ func floatCompare(f1, f2 float64, op object) (bool, error) {
 		return false, fmt.Errorf("invalid compare operator: %v", op)
 	}
 }
+
+func boolCompare(b1, b2 bool, op object) (bool, error) {
+	switch op.idents[0].typ {
+	case eqIdent:
+		return b1 == b2, nil
+	case neqIdent:
+		return b1 != b2, nil
+	default:
+		return false, fmt.Errorf("cannot compare bool values with %v operator", op)
+	}
+}
