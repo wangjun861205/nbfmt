@@ -441,10 +441,9 @@ func (b *ifBlock) run(env map[string]interface{}) (string, error) {
 }
 
 type forBlock struct {
-	src       string
-	expr      []object
-	subBlocks []block
-	// interVarName string
+	src          string
+	expr         []object
+	subBlocks    []block
 	indexVarName string
 	valueVarName string
 	iterObj      object
@@ -519,6 +518,12 @@ func (b *forBlock) init() error {
 	if ctx != "finish" {
 		return fmt.Errorf("invalid for statement: %v", b.expr)
 	}
+	for _, sb := range b.subBlocks {
+		err := sb.init()
+		if err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -532,6 +537,9 @@ func (b *forBlock) run(env map[string]interface{}) (string, error) {
 	builder := strings.Builder{}
 	switch kind {
 	case reflect.Slice, reflect.Array:
+		if val.Len() == 0 {
+			return "", nil
+		}
 		for i := 0; i < val.Len(); i++ {
 			elemVal := val.Index(i)
 			for elemVal.Kind() == reflect.Ptr || elemVal.Kind() == reflect.Interface {
@@ -555,6 +563,9 @@ func (b *forBlock) run(env map[string]interface{}) (string, error) {
 		}
 	case reflect.Map:
 		keyList := val.MapKeys()
+		if len(keyList) == 0 {
+			return "", nil
+		}
 		for _, key := range keyList {
 			elemVal := val.MapIndex(key)
 			for elemVal.Kind() == reflect.Ptr || elemVal.Kind() == reflect.Interface {

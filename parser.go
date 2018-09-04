@@ -135,8 +135,12 @@ func splitBlock(c *code) error {
 			flushBuilder()
 			appendIdent("}", rightBraceIdent)
 		case '.':
-			flushBuilder()
-			appendIdent(".", dotIdent)
+			if isOpen {
+				builder.WriteByte(b)
+			} else {
+				flushBuilder()
+				appendIdent(".", dotIdent)
+			}
 		case ',':
 			flushBuilder()
 			appendIdent(",", commaIdent)
@@ -285,7 +289,7 @@ func parseObj(l *[]code) error {
 					switch typ {
 					case variable:
 						if idents[len(idents)-1].typ != leftBracketIdent {
-							return errors.New("invalid string syntax")
+							return fmt.Errorf("invalid string syntax: %v", id)
 						}
 						idents = append(idents, id)
 					case invalidObj:
@@ -525,7 +529,7 @@ func parseSwitchBlock(c code, l *[]code) (*switchBlock, error) {
 		c, *l = (*l)[0], (*l)[1:]
 		switch c.typ {
 		case str:
-			b.appendSubBlock(&tempBlock{src: c.src})
+			continue
 		default:
 			switch c.idents[0].typ {
 			case caseIdent:
