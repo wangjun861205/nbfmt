@@ -175,6 +175,8 @@ func splitBlock(c *code) error {
 				c.idents[i].typ = switchIdent
 			case id.name == "case":
 				c.idents[i].typ = caseIdent
+			case id.name == "default":
+				c.idents[i].typ = defaultIdent
 			case id.name == "endswitch":
 				c.idents[i].typ = endswitchIdent
 			case id.name == "==":
@@ -314,7 +316,7 @@ func parseObj(l *[]code) error {
 						typ = invalidObj
 						(*l)[i].objects = append((*l)[i].objects, object{idents: []ident{id}, typ: operator})
 					}
-				case ifIdent, elseifIdent, elseIdent, endifIdent, forIdent, inIdent, endforIdent, switchIdent, caseIdent, endswitchIdent:
+				case ifIdent, elseifIdent, elseIdent, endifIdent, forIdent, inIdent, endforIdent, switchIdent, caseIdent, defaultIdent, endswitchIdent:
 					switch typ {
 					case invalidObj:
 						(*l)[i].objects = append((*l)[i].objects, object{idents: []ident{id}, typ: keyword})
@@ -497,7 +499,7 @@ func parseSwitchCaseBlock(c code, l *[]code) (*switchcaseBlock, error) {
 			b.appendSrc(c.src)
 		default:
 			switch c.idents[0].typ {
-			case caseIdent, endswitchIdent:
+			case caseIdent, defaultIdent, endswitchIdent:
 				nl := make([]code, len(*l)+1)
 				nl[0] = c
 				copy(nl[1:], *l)
@@ -532,7 +534,7 @@ func parseSwitchBlock(c code, l *[]code) (*switchBlock, error) {
 			continue
 		default:
 			switch c.idents[0].typ {
-			case caseIdent:
+			case caseIdent, defaultIdent:
 				cb, err := parseSwitchCaseBlock(c, l)
 				if err != nil {
 					return nil, err
