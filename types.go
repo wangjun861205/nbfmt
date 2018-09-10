@@ -287,6 +287,9 @@ func (o object) getVal(env map[string]interface{}) (interface{}, error) {
 			return strconv.ParseBool(o.idents[0].name)
 		}
 	}
+	if !val.IsValid() {
+		return nil, fmt.Errorf("nbfmt getVal() error: value is not valid (object %v)", o)
+	}
 	return val.Interface(), nil
 }
 
@@ -598,7 +601,7 @@ type switchcaseBlock struct {
 	src       string
 	expr      []object
 	subBlocks []block
-	caseVal   *object
+	caseVals  []*object
 }
 
 func (b *switchcaseBlock) getSrc() string {
@@ -620,10 +623,15 @@ func (b *switchcaseBlock) appendSubBlock(blk block) {
 func (b *switchcaseBlock) init() error {
 	switch b.expr[0].idents[0].typ {
 	case caseIdent:
-		if len(b.expr) != 2 {
+		if len(b.expr) < 2 {
 			return fmt.Errorf("invalid switch case: %v", b.expr)
 		}
-		b.caseVal = &(b.expr[1])
+		for i, o := range b.expr[1:] {
+			if o.idents[0].typ != commaIdent {
+				b.caseVals = append(b.caseVals, &(b.expr[i+1]))
+			}
+		}
+
 	case defaultIdent:
 		if len(b.expr) != 1 {
 			return fmt.Errorf("invalid switch default case: %v", b.expr)
@@ -642,7 +650,7 @@ func (b *switchcaseBlock) init() error {
 
 func (b *switchcaseBlock) run(env map[string]interface{}) (string, error) {
 	builder := strings.Builder{}
-	if b.caseVal == nil {
+	if len(b.caseVals) == 0 {
 		for _, sb := range b.subBlocks {
 			s, err := sb.run(env)
 			if err != nil {
@@ -652,119 +660,121 @@ func (b *switchcaseBlock) run(env map[string]interface{}) (string, error) {
 		}
 		return builder.String(), nil
 	}
-	cv, err := b.caseVal.getVal(env)
-	if err != nil {
-		return "", err
-	}
-	switch b.caseVal.typ {
-	case strconst:
-		if sv, ok := env["_targetVal"].(string); ok {
-			if cv.(string) == sv {
-				for _, sb := range b.subBlocks {
-					s, err := sb.run(env)
-					if err != nil {
-						return "", err
-					}
-					builder.WriteString(s)
-				}
-				return builder.String(), nil
-			}
-		} else {
-			return "", fmt.Errorf("switch target value is not string: %v", env["_targetVal"])
+	for _, caseVal := range b.caseVals {
+		cv, err := caseVal.getVal(env)
+		if err != nil {
+			return "", err
 		}
-	case numconst:
-		var isFloat bool
-		for _, id := range b.caseVal.idents {
-			if id.typ == dotIdent {
-				isFloat = true
-			}
-		}
-		if isFloat {
-			var switchValue, caseValue float64
-			switch env["_targetVal"].(type) {
-			case float64:
-				switchValue = env["_targetVal"].(float64)
-			case float32:
-				switchValue = float64(env["_targetVal"].(float32))
-			default:
-				return "", fmt.Errorf("invalid switch value: %v", env["_targetVal"])
-			}
-			switch cv.(type) {
-			case float64:
-				caseValue = cv.(float64)
-			case float32:
-				caseValue = float64(cv.(float32))
-			default:
-				return "", fmt.Errorf("invalid switch case value: %v", cv)
-			}
-			if switchValue == caseValue {
-				for _, sb := range b.subBlocks {
-					s, err := sb.run(env)
-					if err != nil {
-						return "", err
+		switch caseVal.typ {
+		case strconst:
+			if sv, ok := env["_targetVal"].(string); ok {
+				if cv.(string) == sv {
+					for _, sb := range b.subBlocks {
+						s, err := sb.run(env)
+						if err != nil {
+							return "", err
+						}
+						builder.WriteString(s)
 					}
-					builder.WriteString(s)
+					return builder.String(), nil
 				}
-				return builder.String(), nil
+			} else {
+				return "", fmt.Errorf("switch target value is not string: %v", env["_targetVal"])
 			}
-		} else {
-			var switchValue, caseValue int64
-			switch v := env["_targetVal"].(type) {
-			case int:
-				switchValue = int64(v)
-			case int8:
-				switchValue = int64(v)
-			case int16:
-				switchValue = int64(v)
-			case int32:
-				switchValue = int64(v)
-			case int64:
-				switchValue = v
-			default:
-				return "", fmt.Errorf("invalid switch value: %v", env["_targetVal"])
+		case numconst:
+			var isFloat bool
+			for _, id := range caseVal.idents {
+				if id.typ == dotIdent {
+					isFloat = true
+				}
 			}
-			switch v := cv.(type) {
-			case int:
-				caseValue = int64(v)
-			case int8:
-				caseValue = int64(v)
-			case int16:
-				caseValue = int64(v)
-			case int32:
-				caseValue = int64(v)
-			case int64:
-				caseValue = v
-			default:
-				return "", fmt.Errorf("invalid switch case value: %v", cv)
-			}
-			if switchValue == caseValue {
-				for _, sb := range b.subBlocks {
-					s, err := sb.run(env)
-					if err != nil {
-						return "", err
+			if isFloat {
+				var switchValue, caseValue float64
+				switch env["_targetVal"].(type) {
+				case float64:
+					switchValue = env["_targetVal"].(float64)
+				case float32:
+					switchValue = float64(env["_targetVal"].(float32))
+				default:
+					return "", fmt.Errorf("invalid switch value: %v", env["_targetVal"])
+				}
+				switch cv.(type) {
+				case float64:
+					caseValue = cv.(float64)
+				case float32:
+					caseValue = float64(cv.(float32))
+				default:
+					return "", fmt.Errorf("invalid switch case value: %v", cv)
+				}
+				if switchValue == caseValue {
+					for _, sb := range b.subBlocks {
+						s, err := sb.run(env)
+						if err != nil {
+							return "", err
+						}
+						builder.WriteString(s)
 					}
-					builder.WriteString(s)
+					return builder.String(), nil
 				}
-				return builder.String(), nil
-			}
-		}
-	case boolconst:
-		if bv, ok := env["_targetVal"].(bool); ok {
-			if cv.(bool) == bv {
-				for _, sb := range b.subBlocks {
-					s, err := sb.run(env)
-					if err != nil {
-						return "", err
+			} else {
+				var switchValue, caseValue int64
+				switch v := env["_targetVal"].(type) {
+				case int:
+					switchValue = int64(v)
+				case int8:
+					switchValue = int64(v)
+				case int16:
+					switchValue = int64(v)
+				case int32:
+					switchValue = int64(v)
+				case int64:
+					switchValue = v
+				default:
+					return "", fmt.Errorf("invalid switch value: %v", env["_targetVal"])
+				}
+				switch v := cv.(type) {
+				case int:
+					caseValue = int64(v)
+				case int8:
+					caseValue = int64(v)
+				case int16:
+					caseValue = int64(v)
+				case int32:
+					caseValue = int64(v)
+				case int64:
+					caseValue = v
+				default:
+					return "", fmt.Errorf("invalid switch case value: %v", cv)
+				}
+				if switchValue == caseValue {
+					for _, sb := range b.subBlocks {
+						s, err := sb.run(env)
+						if err != nil {
+							return "", err
+						}
+						builder.WriteString(s)
 					}
-					builder.WriteString(s)
+					return builder.String(), nil
 				}
-				return builder.String(), nil
 			}
-		} else {
-			return "", fmt.Errorf("switch target value is not bool: %v", env["_targetVal"])
+		case boolconst:
+			if bv, ok := env["_targetVal"].(bool); ok {
+				if cv.(bool) == bv {
+					for _, sb := range b.subBlocks {
+						s, err := sb.run(env)
+						if err != nil {
+							return "", err
+						}
+						builder.WriteString(s)
+					}
+					return builder.String(), nil
+				}
+			} else {
+				return "", fmt.Errorf("switch target value is not bool: %v", env["_targetVal"])
+			}
+		default:
+			return "", fmt.Errorf("case value is not comparable: %v", caseVal)
 		}
-	default:
-		return "", fmt.Errorf("case value is not comparable: %v", b.caseVal)
 	}
 	return "", nil
 }
@@ -960,7 +970,7 @@ func (e *expression) eval(env map[string]interface{}) (bool, error) {
 		}
 		if isMatch {
 			if e.nextExpr != nil {
-				if e.op.idents[0].typ == andIdent {
+				if e.relOp.idents[0].typ == andIdent {
 					return e.nextExpr.eval(env)
 				}
 				return true, nil
@@ -968,7 +978,7 @@ func (e *expression) eval(env map[string]interface{}) (bool, error) {
 			return true, nil
 		} else {
 			if e.nextExpr != nil {
-				if e.op.idents[0].typ == andIdent {
+				if e.relOp.idents[0].typ == andIdent {
 					return false, nil
 				}
 				return e.nextExpr.eval(env)

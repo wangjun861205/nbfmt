@@ -12,10 +12,8 @@ type Table struct {
 
 var src = `hello world
 	{{ switch X }}
-		{{ case 1 }}
+		{{ case 1, 2, 3 }}
 			hello world
-		{{ case 2 }}
-			test
 		{{ default }}
 			success
 	{{ endswitch }}
@@ -69,7 +67,7 @@ func TestFmt(t *testing.T) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	s, err := temp.run(map[string]interface{}{"X": 5})
+	s, err := temp.run(map[string]interface{}{"X": 3})
 	if err != nil {
 		log.Fatal(err)
 	}
