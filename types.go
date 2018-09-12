@@ -25,7 +25,7 @@ const (
 	endswitchIdent
 	objIdent
 	leftParenthesisIdent
-	righParenthesisIdent
+	rightParenthesisIdent
 	leftBracketIdent
 	rightBracketIdent
 	leftBraceIdent
@@ -43,14 +43,11 @@ const (
 	andIdent
 	orIdent
 	commaIdent
+
+	exclamationIdent
+	varIdent
+	chrIdent
 )
-
-// type exprType int
-
-// const (
-// 	tempExpr exprType = iota
-// 	blockExpr
-// )
 
 type ident struct {
 	name string
@@ -93,11 +90,24 @@ const (
 	operator
 	keyword
 	punct
+
+	//below is for new edition parser
+	strconstobj
+	chrconstobj
+	intconstobj
+	fltconstobj
+	bolconstobj
+	varobj
+	oprobj
+	pctobj
+	kwdobj
+	prtobj
 )
 
 type object struct {
 	typ    objType
 	idents []ident
+	src    string
 }
 
 type objctx int
@@ -627,7 +637,7 @@ func (b *switchcaseBlock) init() error {
 			return fmt.Errorf("invalid switch case: %v", b.expr)
 		}
 		for i, o := range b.expr[1:] {
-			if o.idents[0].typ != commaIdent {
+			if o.typ != invalidObj && o.idents[0].typ != commaIdent {
 				b.caseVals = append(b.caseVals, &(b.expr[i+1]))
 			}
 		}

@@ -2,6 +2,7 @@ package nbfmt
 
 import (
 	"bufio"
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -121,7 +122,7 @@ func splitBlock(c *code) error {
 			appendIdent("(", leftParenthesisIdent)
 		case ')':
 			flushBuilder()
-			appendIdent(")", righParenthesisIdent)
+			appendIdent(")", rightParenthesisIdent)
 		case '[':
 			flushBuilder()
 			appendIdent("[", leftBracketIdent)
@@ -304,7 +305,7 @@ func parseObj(l *[]code) error {
 						typ = invalidObj
 						(*l)[i].objects = append((*l)[i].objects, object{idents: []ident{id}, typ: strconst})
 					}
-				case eqIdent, neqIdent, ltIdent, lteIdent, gtIdent, gteIdent, andIdent, orIdent, leftParenthesisIdent, righParenthesisIdent:
+				case eqIdent, neqIdent, ltIdent, lteIdent, gtIdent, gteIdent, andIdent, orIdent, leftParenthesisIdent, rightParenthesisIdent:
 					switch typ {
 					case invalidObj:
 						(*l)[i].objects = append((*l)[i].objects, object{idents: []ident{id}, typ: operator})
@@ -594,7 +595,7 @@ func parseExpr(l *[]object, sub bool) (*expression, error) {
 				if err != nil {
 					return nil, err
 				}
-			case righParenthesisIdent:
+			case rightParenthesisIdent:
 				if !sub {
 					nl := make([]object, len(*l)+1)
 					nl[0] = o
@@ -663,4 +664,784 @@ func parseTemplate(src string) (template, error) {
 	}
 	temp.blocks = bl
 	return temp, nil
+}
+
+// ==================================================below is new edition==============================================================
+
+type stmtType int
+
+const (
+	templatestmt stmtType = iota
+	ifstmt
+	elseifstmt
+	elsestmt
+	endifstmt
+	forstmt
+	endforstmt
+	switchstmt
+	casestmt
+	defaultstmt
+	endswitchstmt
+	valuestmt
+)
+
+type stmt struct {
+	src     string
+	typ     stmtType
+	idents  []ident
+	objects []*object
+}
+
+func (s *stmt) String() string {
+	return s.src
+}
+
+func parseStmt(src string) ([]*stmt, error) {
+	ctx := "temp"
+	buf := bytes.NewBuffer(make([]byte, 0, 128))
+	l := make([]*stmt, 0, 128)
+	reader := bufio.NewReader(strings.NewReader(src))
+	for {
+		char, err := reader.ReadByte()
+		if err != nil {
+			if err == io.EOF {
+				switch ctx {
+				case "temp", "lbrace":
+					if buf.Len() > 0 {
+						s := &stmt{src: buf.String()}
+						l = append(l, s)
+					}
+					err := parseStmtIdents(l)
+					if err != nil {
+						return nil, err
+					}
+					parseStmtType(l)
+					err = parseStmtObjects(l)
+					if err != nil {
+						return nil, err
+					}
+					parseObjectsType(l)
+					return l, nil
+				default:
+					return nil, fmt.Errorf("nbfmt.parseStmt() parse error: statement is not complate (%s)\n", buf.String())
+				}
+			} else {
+				return nil, err
+			}
+		}
+		switch char {
+		case '{':
+			switch ctx {
+			case "temp":
+				ctx = "lbrace"
+				buf.WriteByte(char)
+			case "lbrace":
+				ctx = "dlbrace"
+				buf.WriteByte(char)
+			case "dlbrace":
+				buf.WriteByte(char)
+			default:
+				buf.WriteByte(char)
+				return nil, fmt.Errorf("nbfmt.parseStmt() parse error: invalid statement syntax (%s)\n", buf.String())
+			}
+		case '}':
+			switch ctx {
+			case "temp":
+				buf.WriteByte(char)
+			case "lbrace":
+				ctx = "temp"
+				buf.WriteByte(char)
+			case "dlbrace":
+				buf.WriteByte(char)
+				return nil, fmt.Errorf("nbfmt.parseStmt() parse error: invalid statement syntax (%s)\n", buf.String())
+			case "rbrace":
+				ctx = "temp"
+				buf.WriteByte(char)
+				s := &stmt{src: buf.String()}
+				l = append(l, s)
+				buf.Reset()
+			case "stmt":
+				ctx = "rbrace"
+				buf.WriteByte(char)
+			default:
+				buf.WriteByte(char)
+				return nil, fmt.Errorf("nbfmt.parseStmt() parse error: unsupported context (%s) in statement (%s)\n", ctx, buf.String())
+			}
+		default:
+			switch ctx {
+			case "temp":
+				buf.WriteByte(char)
+			case "lbrace":
+				ctx = "temp"
+				buf.WriteByte(char)
+			case "dlbrace":
+				ctx = "stmt"
+				buf.Truncate(buf.Len() - 2)
+				if buf.Len() > 0 {
+					s := &stmt{src: buf.String()}
+					l = append(l, s)
+					buf.Reset()
+				}
+				buf.WriteString("{{")
+				buf.WriteByte(char)
+			case "stmt":
+				buf.WriteByte(char)
+			default:
+				buf.WriteByte(char)
+				return nil, fmt.Errorf("nbfmt.parseStmt() parse error: invalid statement syntax (%s)\n", buf.String())
+			}
+		}
+	}
+}
+
+func parseStmtType(l []*stmt) {
+	for _, s := range l {
+		switch len(s.idents) {
+		case 0:
+			s.typ = templatestmt
+		default:
+			switch s.idents[0].typ {
+			case ifIdent:
+				s.typ = ifstmt
+			case elseifIdent:
+				s.typ = elseifstmt
+			case elseIdent:
+				s.typ = elsestmt
+			case endifIdent:
+				s.typ = endifstmt
+			case forIdent:
+				s.typ = forstmt
+			case endforIdent:
+				s.typ = endforstmt
+			case switchIdent:
+				s.typ = switchstmt
+			case caseIdent:
+				s.typ = casestmt
+			case defaultIdent:
+				s.typ = defaultstmt
+			case endswitchIdent:
+				s.typ = endswitchstmt
+			default:
+				s.typ = valuestmt
+			}
+		}
+	}
+}
+
+var numIdentRe = regexp.MustCompile(`^-?\d+$`)
+var varIdentRe = regexp.MustCompile(`^[a-zA-z_][\w_]*$`)
+var chrIdentRe = regexp.MustCompile(`^'.*'$`)
+var strIdentRe = regexp.MustCompile("^[\"|`].*[\"|`]$")
+var boolIdentRe = regexp.MustCompile("^(true|false)$")
+
+func parseIdent(s string) (ident, error) {
+	switch s {
+	case "if":
+		return ident{name: s, typ: ifIdent}, nil
+	case "elseif":
+		return ident{name: s, typ: elseifIdent}, nil
+	case "else":
+		return ident{name: s, typ: elseIdent}, nil
+	case "endif":
+		return ident{name: s, typ: endifIdent}, nil
+	case "for":
+		return ident{name: s, typ: forIdent}, nil
+	case "in":
+		return ident{name: s, typ: inIdent}, nil
+	case "endfor":
+		return ident{name: s, typ: endforIdent}, nil
+	case "switch":
+		return ident{name: s, typ: switchIdent}, nil
+	case "case":
+		return ident{name: s, typ: caseIdent}, nil
+	case "default":
+		return ident{name: s, typ: defaultIdent}, nil
+	case "endswitch":
+		return ident{name: s, typ: endswitchIdent}, nil
+	case ".":
+		return ident{name: s, typ: dotIdent}, nil
+	case ",":
+		return ident{name: s, typ: commaIdent}, nil
+	case "(":
+		return ident{name: s, typ: leftParenthesisIdent}, nil
+	case ")":
+		return ident{name: s, typ: rightParenthesisIdent}, nil
+	case "[":
+		return ident{name: s, typ: leftBracketIdent}, nil
+	case "]":
+		return ident{name: s, typ: rightBracketIdent}, nil
+	case "{":
+		return ident{name: s, typ: leftBraceIdent}, nil
+	case "}":
+		return ident{name: s, typ: rightBracketIdent}, nil
+	case "!":
+		return ident{name: s, typ: exclamationIdent}, nil
+	case "<":
+		return ident{name: s, typ: ltIdent}, nil
+	case ">":
+		return ident{name: s, typ: gtIdent}, nil
+	case "<=":
+		return ident{name: s, typ: lteIdent}, nil
+	case ">=":
+		return ident{name: s, typ: gteIdent}, nil
+	case "==":
+		return ident{name: s, typ: eqIdent}, nil
+	case "!=":
+		return ident{name: s, typ: neqIdent}, nil
+	case "&&":
+		return ident{name: s, typ: andIdent}, nil
+	case "||":
+		return ident{name: s, typ: orIdent}, nil
+	default:
+		switch {
+		case numIdentRe.MatchString(s):
+			return ident{name: s, typ: numIdent}, nil
+		case varIdentRe.MatchString(s):
+			return ident{name: s, typ: varIdent}, nil
+		case chrIdentRe.MatchString(s):
+			return ident{name: s, typ: chrIdent}, nil
+		case strIdentRe.MatchString(s):
+			return ident{name: s, typ: strIdent}, nil
+		case boolIdentRe.MatchString(s):
+			return ident{name: s, typ: strIdent}, nil
+		default:
+			return ident{}, fmt.Errorf("nbfmt.parseIdent() parse error: invalid ident (%#v)", s)
+		}
+	}
+}
+
+func parseStmtIdents(l []*stmt) error {
+OUTER:
+	for _, s := range l {
+		if s.src[:2] != "{{" {
+			continue
+		}
+		reader := strings.NewReader(strings.Trim(s.src, "{} "))
+		buf := strings.Builder{}
+		ctx := "stmt"
+		handleBuf := func() error {
+			id, err := parseIdent(buf.String())
+			if err != nil {
+				return err
+			}
+			s.idents = append(s.idents, id)
+			buf.Reset()
+			return nil
+		}
+		for {
+			char, err := reader.ReadByte()
+			if err != nil {
+				if err == io.EOF {
+					switch ctx {
+					case "stmt":
+						continue OUTER
+					default:
+						err := handleBuf()
+						if err != nil {
+							return err
+						}
+						continue OUTER
+					}
+				} else {
+					return err
+				}
+			}
+			switch char {
+			case '\'':
+				switch ctx {
+				case "stmt":
+					ctx = "singleQuote"
+					buf.WriteByte(char)
+				case "singleQuote":
+					ctx = "stmt"
+					buf.WriteByte(char)
+					err := handleBuf()
+					if err != nil {
+						return err
+					}
+				case "doubleQuote", "backQuote":
+					buf.WriteByte(char)
+				default:
+					ctx = "singleQuote"
+					err := handleBuf()
+					if err != nil {
+						return err
+					}
+					buf.WriteByte(char)
+				}
+			case '"':
+				switch ctx {
+				case "stmt":
+					ctx = "doubleQuote"
+					buf.WriteByte(char)
+				case "doubleQuote":
+					ctx = "stmt"
+					buf.WriteByte(char)
+					err := handleBuf()
+					if err != nil {
+						return err
+					}
+				case "backQuote", "singleQuote":
+					buf.WriteByte(char)
+				default:
+					ctx = "doubleQuote"
+					err := handleBuf()
+					if err != nil {
+						return err
+					}
+					buf.WriteByte(char)
+				}
+			case '`':
+				switch ctx {
+				case "stmt":
+					ctx = "backQuote"
+					buf.WriteByte(char)
+				case "backQuote":
+					ctx = "stmt"
+					buf.WriteByte(char)
+					err := handleBuf()
+					if err != nil {
+						return err
+					}
+				case "doubleQuote", "singleQuote":
+					buf.WriteByte(char)
+				default:
+					ctx = "backQuote"
+					err := handleBuf()
+					if err != nil {
+						return err
+					}
+					buf.WriteByte(char)
+				}
+			case ' ', '\t', '\n', '\r':
+				switch ctx {
+				case "stmt":
+					continue
+				case "singleQuote", "doubleQuote", "backQuote":
+					buf.WriteByte(char)
+				default:
+					ctx = "stmt"
+					err := handleBuf()
+					if err != nil {
+						return err
+					}
+				}
+			case '<':
+				switch ctx {
+				case "stmt":
+					ctx = "lt"
+					buf.WriteByte(char)
+				case "singleQuote", "doubleQuote", "backQuote":
+					buf.WriteByte(char)
+				default:
+					ctx = "lt"
+					err := handleBuf()
+					if err != nil {
+						return err
+					}
+					buf.WriteByte(char)
+				}
+			case '>':
+				switch ctx {
+				case "stmt":
+					ctx = "gt"
+					buf.WriteByte(char)
+				case "singleQuote", "doubleQuote", "backQuote":
+					buf.WriteByte(char)
+				default:
+					ctx = "lt"
+					err := handleBuf()
+					if err != nil {
+						return err
+					}
+					buf.WriteByte(char)
+				}
+			case '!':
+				switch ctx {
+				case "stmt":
+					ctx = "exclamation"
+					buf.WriteByte(char)
+				case "singleQuote", "doubleQuote", "backQuote":
+					buf.WriteByte(char)
+				default:
+					ctx = "exclamation"
+					err := handleBuf()
+					if err != nil {
+						return err
+					}
+					buf.WriteByte(char)
+				}
+			case '=':
+				switch ctx {
+				case "stmt":
+					ctx = "equal"
+					buf.WriteByte(char)
+				case "singleQuote", "doubleQuote", "backQuote":
+					buf.WriteByte(char)
+				case "exclamation", "equal", "lt", "gt":
+					ctx = "stmt"
+					buf.WriteByte(char)
+					err := handleBuf()
+					if err != nil {
+						return err
+					}
+				default:
+					ctx = "equal"
+					err := handleBuf()
+					if err != nil {
+						return err
+					}
+					buf.WriteByte(char)
+				}
+			case '&':
+				switch ctx {
+				case "stmt":
+					ctx = "and"
+					buf.WriteByte(char)
+				case "singleQuote", "doubleQuote", "backQuote":
+					buf.WriteByte(char)
+				case "and":
+					ctx = "stmt"
+					buf.WriteByte(char)
+					err := handleBuf()
+					if err != nil {
+						return err
+					}
+				default:
+					ctx = "and"
+					err := handleBuf()
+					if err != nil {
+						return err
+					}
+					buf.WriteByte(char)
+				}
+			case '|':
+				switch ctx {
+				case "stmt":
+					ctx = "or"
+					buf.WriteByte(char)
+				case "singleQuote", "doubleQuote", "backQuote":
+					buf.WriteByte(char)
+				case "or":
+					ctx = "stmt"
+					buf.WriteByte(char)
+					err := handleBuf()
+					if err != nil {
+						return err
+					}
+				default:
+					ctx = "or"
+					err := handleBuf()
+					if err != nil {
+						return err
+					}
+					buf.WriteByte(char)
+				}
+			case '(', ')', '[', ']', '{', '}', ',', '.':
+				switch ctx {
+				case "stmt":
+					buf.WriteByte(char)
+					err := handleBuf()
+					if err != nil {
+						return err
+					}
+				case "singleQuote", "doubleQuote", "backQuote":
+					buf.WriteByte(char)
+				default:
+					ctx = "stmt"
+					err := handleBuf()
+					if err != nil {
+						return err
+					}
+					buf.WriteByte(char)
+					err = handleBuf()
+					if err != nil {
+						return err
+					}
+
+				}
+			default:
+				switch ctx {
+				case "stmt":
+					ctx = "ident"
+					buf.WriteByte(char)
+				case "singleQuote", "doubleQuote", "backQuote":
+					buf.WriteByte(char)
+				case "ident":
+					buf.WriteByte(char)
+				default:
+					ctx = "ident"
+					err := handleBuf()
+					if err != nil {
+						return err
+					}
+					buf.WriteByte(char)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func parseStmtObjects(l []*stmt) error {
+OUTER:
+	for _, s := range l {
+		if s.typ != templatestmt {
+			ctxList := []string{"clean"}
+			idBuf := make([]ident, 0, 8)
+			srcBuf := strings.Builder{}
+			currentCtx := func() string {
+				return ctxList[len(ctxList)-1]
+			}
+			popCtx := func() {
+				ctxList = ctxList[:len(ctxList)-1]
+			}
+			pushCtx := func(ctx string) {
+				ctxList = append(ctxList, ctx)
+			}
+			resetCtx := func() {
+				ctxList = []string{"clean"}
+			}
+			resetIdBuf := func() {
+				idBuf = idBuf[:0]
+			}
+			appendId := func(id ident) {
+				idBuf = append(idBuf, id)
+				srcBuf.WriteString(id.name)
+			}
+			copyIdBuf := func() []ident {
+				l := make([]ident, len(idBuf))
+				copy(l, idBuf)
+				return l
+			}
+			refresh := func() {
+				s.objects = append(s.objects, &object{src: srcBuf.String(), idents: copyIdBuf()})
+				resetCtx()
+				resetIdBuf()
+				srcBuf.Reset()
+			}
+			for _, id := range s.idents {
+				switch id.typ {
+				case varIdent:
+					switch currentCtx() {
+					case "clean", "index":
+						pushCtx("var")
+						appendId(id)
+					case "dot":
+						popCtx()
+						if currentCtx() != "var" {
+							return fmt.Errorf("nbfmt.parseStmtObjects parse error: invalid variable ident (%s) in statement (%s)\n", id.name, s.src)
+						}
+						appendId(id)
+					case "operator", "keyword", "comma":
+						refresh()
+						pushCtx("var")
+						appendId(id)
+					default:
+						return fmt.Errorf("nbfmt.parseStmtObjects parse error: invalid variable ident (%s) in statement (%s)\n", id.name, s.src)
+					}
+				case strIdent:
+					switch currentCtx() {
+					case "clean", "index":
+						pushCtx("str")
+						appendId(id)
+					case "operator", "keyword", "comma":
+						refresh()
+						pushCtx("str")
+						appendId(id)
+					default:
+						return fmt.Errorf("nbfmt.parseStmtObjects parse error: invalid string ident (%s) in statement (%s)\n", id.name, s.src)
+					}
+				case numIdent:
+					switch currentCtx() {
+					case "clean", "index":
+						pushCtx("int")
+						appendId(id)
+					case "dot":
+						popCtx()
+						if currentCtx() != "int" {
+							return fmt.Errorf("nbfmt.parseStmtObjects() parse error: invalid string ident(%s) in statement (%s)\n", id.name, s.src)
+						}
+						popCtx()
+						pushCtx("float")
+						appendId(id)
+					case "float":
+						appendId(id)
+					case "operator", "keyword", "comma":
+						refresh()
+						pushCtx("int")
+						appendId(id)
+					default:
+						return fmt.Errorf("nbfmt.parseStmtObjects parse error: invalid number ident (%s) in statement (%s)\n", id.name, s.src)
+					}
+				case chrIdent:
+					switch currentCtx() {
+					case "clean", "index":
+						pushCtx("chr")
+						appendId(id)
+					case "operator", "keyword", "comma":
+						refresh()
+						pushCtx("int")
+						appendId(id)
+					default:
+						return fmt.Errorf("nbfmt.parseStmtObjects parse error: invalid char ident (%s) in statement (%s)\n", id.name, s.src)
+					}
+				case leftBracketIdent:
+					switch currentCtx() {
+					case "var":
+						pushCtx("index")
+						appendId(id)
+					default:
+						return fmt.Errorf("nbfmt.parseStmtObjects parse error: invalid left bracket ident (%s) in statement (%s)\n", id.name, s.src)
+					}
+				case rightBracketIdent:
+					switch currentCtx() {
+					case "var", "int", "float", "str", "chr", "bool":
+						popCtx()
+						if currentCtx() != "index" {
+							return fmt.Errorf("nbfmt.parseStmtObjects parse error: invalid right bracket ident (%s) in statement (%s)\n", id.name, s.src)
+						}
+						popCtx()
+						appendId(id)
+					default:
+						return fmt.Errorf("nbfmt.parseStmtObjects parse error: invalid right bracket ident (%s) in statement (%s)\n", id.name, s.src)
+					}
+				case dotIdent:
+					switch currentCtx() {
+					case "var", "int":
+						pushCtx("dot")
+						appendId(id)
+					default:
+						return fmt.Errorf("nbfmt.parseStmtObjects parse error: invalid dot ident (%s) in statement (%s)\n", id.name, s.src)
+					}
+				case ifIdent, elseifIdent, elseIdent, endifIdent, forIdent, inIdent, endforIdent, switchIdent, caseIdent, defaultIdent, endswitchIdent:
+					switch currentCtx() {
+					case "clean":
+						pushCtx("keyword")
+						appendId(id)
+					case "var", "int", "float", "str", "chr", "bool":
+						popCtx()
+						if currentCtx() != "clean" {
+							return fmt.Errorf("nbfmt.parseStmtObjects parse error: invalid keyword ident (%s) in statement (%s)\n", id.name, s.src)
+						}
+						refresh()
+						pushCtx("keyword")
+						appendId(id)
+					default:
+						return fmt.Errorf("nbfmt.parseStmtObjects parse error: invalid keyword ident (%s) in statement (%s)\n", id.name, s.src)
+					}
+				case ltIdent, lteIdent, gtIdent, gteIdent, eqIdent, neqIdent, andIdent, orIdent:
+					switch currentCtx() {
+					case "var", "int", "float", "str", "chr", "bool":
+						refresh()
+						pushCtx("operator")
+						appendId(id)
+					default:
+						return fmt.Errorf("nbfmt.parseStmtObjects parse error: invalid operator ident (%s) in statement (%s)\n", id.name, s.src)
+
+					}
+				case exclamationIdent:
+					switch currentCtx() {
+					case "clean":
+						pushCtx("operator")
+						appendId(id)
+					case "operator", "comma":
+						refresh()
+						pushCtx("opeartor")
+						appendId(id)
+					default:
+						return fmt.Errorf("nbfmt.parseStmtObjects parse error: invalid exclamation ident (%s) in statement (%s)\n", id.name, s.src)
+					}
+				case leftParenthesisIdent:
+					switch currentCtx() {
+					case "clean":
+						appendId(id)
+						refresh()
+					case "keyword", "operator", "comma":
+						refresh()
+						appendId(id)
+						refresh()
+					default:
+						return fmt.Errorf("nbfmt.parseStmtObjects parse error: invalid left parenthesis ident (%s) in statement (%s)\n", id.name, s.src)
+					}
+				case rightParenthesisIdent:
+					switch currentCtx() {
+					case "clean", "dot", "index", "keyword", "operator":
+						return fmt.Errorf("nbfmt.parseStmtObjects parse error: invalid right parenthesis ident (%s) in statement (%s)\n", id.name, s.src)
+					default:
+						refresh()
+						appendId(id)
+						refresh()
+					}
+				case commaIdent:
+					switch currentCtx() {
+					case "clean", "dot", "index", "keyword", "operator", "comma":
+						return fmt.Errorf("nbfmt.parseStmtObjects parse error: invalid comma ident (%s) in statement (%s)\n", id.name, s.src)
+					default:
+						refresh()
+						pushCtx("comma")
+						appendId(id)
+					}
+				default:
+					return fmt.Errorf("nbfmt.parseStmtObjects() parse error: unsupported ident (%s) in statement (%s)\n", id.name, s.src)
+				}
+			}
+			switch currentCtx() {
+			case "clean":
+				continue OUTER
+			case "var", "int", "float", "str", "chr", "bool", "keyword":
+				popCtx()
+				if currentCtx() != "clean" {
+					return fmt.Errorf("nbfmt.parseStmtObjects() parse error: incomplete ident (%s) in statement (%s)\n", srcBuf.String(), s.src)
+				}
+				refresh()
+			default:
+				return fmt.Errorf("nbfmt.parseStmtObjects() parse error: incomplete ident (%s) in statement (%s)\n", srcBuf.String(), s.src)
+			}
+		}
+	}
+	return nil
+}
+
+func parseObjectsType(l []*stmt) {
+	for _, s := range l {
+		switch s.typ {
+		case templatestmt:
+			continue
+		default:
+			for _, o := range s.objects {
+				switch o.idents[0].typ {
+				case ifIdent, elseifIdent, elseIdent, endifIdent, forIdent, inIdent, endforIdent, switchIdent, caseIdent, defaultIdent, endswitchIdent:
+					o.typ = kwdobj
+				case ltIdent, lteIdent, gtIdent, gteIdent, eqIdent, neqIdent, exclamationIdent, andIdent, orIdent:
+					o.typ = oprobj
+				case strIdent:
+					o.typ = strconstobj
+				case chrIdent:
+					o.typ = chrconstobj
+				case numIdent:
+					var isFloat bool
+					for _, id := range o.idents {
+						if id.typ == dotIdent {
+							isFloat = true
+							break
+						}
+					}
+					if isFloat {
+						o.typ = fltconstobj
+					} else {
+						o.typ = intconstobj
+					}
+				case boolIdent:
+					o.typ = bolconstobj
+				case varIdent:
+					o.typ = varobj
+				case commaIdent:
+					o.typ = pctobj
+				case leftParenthesisIdent, rightParenthesisIdent:
+					o.typ = prtobj
+				}
+			}
+		}
+	}
 }
