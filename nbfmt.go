@@ -268,11 +268,15 @@ package nbfmt
 // }
 
 func Fmt(src string, env map[string]interface{}) (string, error) {
-	temp, err := parseTemplate(src)
+	sl, err := parseStmt(src)
 	if err != nil {
 		return "", err
 	}
-	s, err := temp.run(env)
+	temp, err := genTemplate(sl)
+	if err != nil {
+		return "", err
+	}
+	s, err := temp.eval(env)
 	if err != nil {
 		return "", err
 	}
