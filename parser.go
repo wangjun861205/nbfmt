@@ -438,6 +438,7 @@ func parseStmt(src string) ([]*stmt, error) {
 						return nil, err
 					}
 					parseStmtType(l)
+					trimStmt(l)
 					return l, nil
 				default:
 					return nil, fmt.Errorf("nbfmt.parseStmt() parse error: statement is not complate (%s)\n", buf.String())
@@ -540,6 +541,19 @@ func parseStmtType(l []*stmt) {
 				s.typ = endswitchstmt
 			default:
 				s.typ = valuestmt
+			}
+		}
+	}
+}
+
+func trimStmt(l []*stmt) {
+	for i, s := range l[:len(l)-1] {
+		switch s.typ {
+		case ifstmt, elseifstmt, elsestmt, endifstmt, forstmt, endforstmt, switchstmt, casestmt, defaultstmt, endswitchstmt:
+			if l[i+1].typ == templatestmt {
+				if l[i+1].src[0] == '\n' {
+					l[i+1].src = l[i+1].src[1:]
+				}
 			}
 		}
 	}
