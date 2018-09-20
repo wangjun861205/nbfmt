@@ -154,7 +154,7 @@ OUTER:
 				if err == io.EOF {
 					switch ctx {
 					case "empty":
-						return nil
+						continue OUTER
 					case "str":
 						return fmt.Errorf("nbfmt.parseIdents() error: incompleted string in statement (%s)\n", s)
 					default:
@@ -334,11 +334,32 @@ OUTER:
 					builder.WriteByte(b)
 					return fmt.Errorf("nbfmt.parseIdents() error: invalid ident (%s) in statement (%s)\n", builder.String(), s)
 				}
-			case '(', ')', '[', ']', ',':
+			case '(', ')', '[', ']':
 				switch ctx {
 				case "empty":
 					switch checkPrev() {
 					case "empty", "operator", "punctuation", "keyword":
+						ctx = "punctuation"
+						builder.WriteByte(b)
+					default:
+						builder.WriteByte(b)
+						return fmt.Errorf("nbfmt.parseIdents() error: invalid ident (%s) in statement (%s)\n", builder.String(), s)
+					}
+				case "str", "byte":
+					builder.WriteByte(b)
+				default:
+					err := reflush()
+					if err != nil {
+						return err
+					}
+					ctx = "punctuation"
+					builder.WriteByte(b)
+				}
+			case ',':
+				switch ctx {
+				case "empty":
+					switch checkPrev() {
+					case "var", "str", "chr", "int", "float", "bool":
 						ctx = "punctuation"
 						builder.WriteByte(b)
 					default:

@@ -185,7 +185,7 @@ func (b *ifcaseBlock) appendSubBlock(blk block) {
 }
 
 func (b *ifcaseBlock) eval(env map[string]interface{}) (string, error) {
-	expVal, err := b.exp.eval(env)
+	expVal, err := b.exp.copy().eval(env)
 	if err != nil {
 		return "", err
 	}
@@ -318,7 +318,7 @@ func (b *forBlock) eval(env map[string]interface{}) (string, error) {
 	for k, v := range env {
 		localEnv[k] = v
 	}
-	iterObj, err := b.objExpr.eval(env)
+	iterObj, err := b.objExpr.copy().eval(env)
 	if err != nil {
 		return "", err
 	}
@@ -384,7 +384,7 @@ func (b *switchcaseBlock) init() error {
 func (b *switchcaseBlock) eval(env map[string]interface{}) (string, error) {
 	tarVal := env["_targetVal"]
 	for _, e := range b.exps {
-		expVal, err := e.eval(env)
+		expVal, err := e.copy().eval(env)
 		if err != nil {
 			return "", err
 		}
@@ -430,7 +430,7 @@ func (b *switchBlock) eval(env map[string]interface{}) (string, error) {
 	for k, v := range env {
 		localEnv[k] = v
 	}
-	tarVal, err := b.exp.eval(env)
+	tarVal, err := b.exp.copy().eval(env)
 	if err != nil {
 		return "", err
 	}
