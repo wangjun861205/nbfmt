@@ -7,30 +7,20 @@ import (
 )
 
 type Table struct {
-	TableName string
+	BoolList []bool
 }
 
 const src = `
-{{ for k, v in m }}
-	{{ if v }}
-		{{ switch k }}
-			{{ case "hello" }}
-				{{ k }}
-			{{ default }}
-				not hello
-		{{ endswitch }}
-	{{ elseif v == false }}
-		this is false
-	{{ endif }}
-{{ endfor }}
+{{ if !table.BoolList[2] }}
+	success
+{{ else }}
+	not false
+{{ endif }}
 `
 
 func TestFmt(t *testing.T) {
 	s, err := Fmt(src, map[string]interface{}{
-		"m": map[string]bool{
-			"hell":  true,
-			"world": false,
-		},
+		"table": Table{[]bool{false, true, true}},
 	})
 	if err != nil {
 		log.Fatal(err)

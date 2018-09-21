@@ -531,6 +531,7 @@ func (o *operator) String() string {
 var indexOperator = operator{"[]", 7}
 var dotOperator = operator{".", 7}
 var derefOperator = operator{"*", 6}
+var notOperator = operator{"!", 6}
 var mulOperator = operator{"*", 5}
 var divOperator = operator{"/", 5}
 var plugOperator = operator{"+", 4}
@@ -847,11 +848,23 @@ func index(obj, idx interface{}) (interface{}, error) {
 	}
 }
 
+func not(i interface{}) (bool, error) {
+	boolVal, ok := i.(bool)
+	if !ok {
+		return false, fmt.Errorf("nbfmt.not() error: invalid not operate for %T type (%v)", i, i)
+	}
+	return !boolVal, nil
+}
+
 func (e *expression) copy() *expression {
 	ne := &expression{}
-	id := *e.ident
+	if e.ident != nil {
+		nid := *e.ident
+		ne.ident = &nid
+	}
+	// id := *e.ident
 	op := e.operator
-	ne.ident = &id
+	// ne.ident = &id
 	ne.operator = op
 	if e.subExpr != nil {
 		ne.subExpr = e.subExpr.copy()
@@ -895,6 +908,16 @@ func (e *expression) eval(env map[string]interface{}) (interface{}, error) {
 			return nil, err
 		}
 		result, err := deref(rv)
+		if err != nil {
+			return nil, err
+		}
+		virExpr.value = result
+	case &notOperator:
+		rv, err := rightVal()
+		if err != nil {
+			return nil, err
+		}
+		result, err := not(rv)
 		if err != nil {
 			return nil, err
 		}

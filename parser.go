@@ -595,7 +595,8 @@ func parseExpression(identList *[]*ident, isGroup bool, isIndex bool) (*expressi
 	}
 	e := &expression{}
 	id := pop()
-	var deref bool
+	// var deref bool
+	var unary bool
 	switch id.typ {
 	case asteriskIdent:
 		nextIdent := peek()
@@ -603,7 +604,16 @@ func parseExpression(identList *[]*ident, isGroup bool, isIndex bool) (*expressi
 			return nil, fmt.Errorf("nbfmt.parseExpression() error: invalid asterisk ident (%s) in expression (%s)\n", id.src, str())
 		}
 		e.operator = &derefOperator
-		deref = true
+		// deref = true
+		unary = true
+	case exclamationIdent:
+		nextIdent := peek()
+		if nextIdent == nil || nextIdent.typ != varIdent {
+			return nil, fmt.Errorf("nbfmt.parseExpression() error: invalid asterisk ident (%s) in expression (%s)\n", id.src, str())
+		}
+		e.operator = &notOperator
+		// deref = true
+		unary = true
 	case varIdent, strIdent, byteIdent, intIdent, floatIdent, boolIdent, nilIdent:
 		e.ident = id
 	case leftParenthesisIdent:
@@ -623,7 +633,8 @@ func parseExpression(identList *[]*ident, isGroup bool, isIndex bool) (*expressi
 	default:
 		return nil, fmt.Errorf("nbfmt.parseExpression() error: invalid ident (%s) in expression (%s)\n", id.src, str())
 	}
-	if !deref {
+	// if !deref {
+	if !unary {
 		op := pop()
 		if op == nil {
 			return e, nil
