@@ -324,7 +324,7 @@ func (b *forBlock) eval(env map[string]interface{}) (string, error) {
 	}
 	builder := strings.Builder{}
 	iterObjVal := reflect.ValueOf(iterObj)
-	switch iterObjVal.Type().Kind() {
+	switch iterObjVal.Kind() {
 	case reflect.Slice, reflect.Array:
 		for i := 0; i < iterObjVal.Len(); i++ {
 			localEnv[b.indexVarName] = int64(i)
@@ -341,7 +341,7 @@ func (b *forBlock) eval(env map[string]interface{}) (string, error) {
 	case reflect.Map:
 		keys := iterObjVal.MapKeys()
 		for _, key := range keys {
-			localEnv[b.indexVarName] = key
+			localEnv[b.indexVarName] = key.Interface()
 			localEnv[b.valueVarName] = iterObjVal.MapIndex(key).Interface()
 			for _, sb := range b.subBlocks {
 				s, err := sb.eval(localEnv)
@@ -486,7 +486,7 @@ func (b *valueBlock) eval(env map[string]interface{}) (string, error) {
 	case nil:
 		return "nil", nil
 	default:
-		return "", fmt.Errorf("nbfmt.valueBlock.eval() error: unsupported value block type (%v)", *b.exp)
+		return "", fmt.Errorf("nbfmt.valueBlock.eval() error: unsupported value block type (%s)", b.exp.String())
 	}
 }
 
