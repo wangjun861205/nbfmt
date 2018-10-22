@@ -1001,7 +1001,7 @@ OUTER:
 		}
 	}
 	if ctx != "finish" {
-		return nil, errors.New("nbfmt.genFroBlock() parse error: not finished for block\n")
+		return nil, errors.New("nbfmt.genForBlock() parse error: not finished for block\n")
 	}
 	if len(fb.subBlocks) == 0 {
 		return nil, errors.New("nbfmt.genForBlock() parse error: empty for block\n")
